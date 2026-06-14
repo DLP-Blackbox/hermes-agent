@@ -4,7 +4,7 @@ on:
   release:
     types: [published]
   push:
-    branches: [main]
+    branches: [hermes-release/v4.0.00]
     paths:
       - 'website/**'
       - 'skills/**'
