@@ -17,8 +17,8 @@ env:
   UPSTREAM_REPO: NousResearch/hermes-agent
   UPSTREAM_BRANCH: main
   MIRROR_BRANCH: main
-  CUSTOM_BASE_BRANCH: nous-upstream
-  RELEASE_BRANCH: hermes-release/v4.0.00
+  CUSTOM_BASE_BRANCH: dlp-main
+  RELEASE_BRANCH: dlp-release
 
 jobs:
   sync:
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout fork
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -66,7 +66,7 @@ jobs:
           git reset --hard "upstream/${UPSTREAM_BRANCH}"
           git push origin "HEAD:${MIRROR_BRANCH}" --force-with-lease
 
-      - name: Rebase nous-upstream onto main
+      - name: Rebase dlp-main onto main
         run: |
           set -euo pipefail
           if ! git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
@@ -78,7 +78,7 @@ jobs:
           if git rev-list --count "${MIRROR_BRANCH}..HEAD" | grep -qv '^0$'; then
             git rebase "${MIRROR_BRANCH}"
           else
-            echo "nous-upstream has no unique commits; resetting to main."
+            echo "dlp-main has no unique commits; resetting to main."
             git reset --hard "${MIRROR_BRANCH}"
           fi
           git push origin "${CUSTOM_BASE_BRANCH}" --force-with-lease
@@ -97,7 +97,7 @@ jobs:
           fi
           echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Rebase hermes-release/v4.0.00 onto latest upstream release
+      - name: Rebase dlp-release onto latest upstream release
         env:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
           RELEASE_BRANCH: ${{ env.RELEASE_BRANCH }}
