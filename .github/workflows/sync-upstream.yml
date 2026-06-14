@@ -1,0 +1,124 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: NousResearch/hermes-agent
+  UPSTREAM_BRANCH: main
+  MIRROR_BRANCH: main
+  CUSTOM_BASE_BRANCH: custom-base
+  RELEASE_TRACKING_BRANCH: release-tracking
+  RELEASE_BASE_FILE: .fork/release-base
+
+jobs:
+  sync:
+    if: github.repository == 'DLP-Blackbox/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure upstream remote
+        run: |
+          set -euo pipefail
+          upstream_url="https://github.com/${UPSTREAM_REPO}.git"
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "${upstream_url}"
+          else
+            git remote add upstream "${upstream_url}"
+          fi
+        env:
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
+
+      - name: Fetch upstream
+        run: |
+          set -euo pipefail
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          git fetch upstream --tags
+
+      - name: Sync main mirror from upstream
+        run: |
+          set -euo pipefail
+          if git show-ref --verify --quiet "refs/remotes/origin/${MIRROR_BRANCH}"; then
+            git checkout "${MIRROR_BRANCH}"
+          else
+            git checkout -B "${MIRROR_BRANCH}" "upstream/${UPSTREAM_BRANCH}"
+          fi
+          git reset --hard "upstream/${UPSTREAM_BRANCH}"
+          git push origin "HEAD:${MIRROR_BRANCH}" --force-with-lease
+
+      - name: Rebase custom-base onto main
+        run: |
+          set -euo pipefail
+          if ! git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
+            echo "Branch ${CUSTOM_BASE_BRANCH} does not exist on origin; skipping rebase."
+            exit 0
+          fi
+          git fetch origin "${CUSTOM_BASE_BRANCH}"
+          git checkout "${CUSTOM_BASE_BRANCH}"
+          if git rev-list --count "${MIRROR_BRANCH}..HEAD" >/dev/null 2>&1; then
+            git rebase "${MIRROR_BRANCH}"
+          else
+            echo "custom-base has no unique commits; resetting to main."
+            git reset --hard "${MIRROR_BRANCH}"
+          fi
+          git push origin "${CUSTOM_BASE_BRANCH}" --force-with-lease
+
+      - name: Resolve latest upstream release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
+        run: |
+          set -euo pipefail
+          release_tag="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq -r '.tag_name')"
+          if [ -z "${release_tag}" ] || [ "${release_tag}" = "null" ]; then
+            echo "::error::Could not resolve latest release tag from ${UPSTREAM_REPO}"
+            exit 1
+          fi
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Rebase release-tracking onto latest upstream release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          RELEASE_BASE_FILE: ${{ env.RELEASE_BASE_FILE }}
+          RELEASE_TRACKING_BRANCH: ${{ env.RELEASE_TRACKING_BRANCH }}
+          CUSTOM_BASE_BRANCH: ${{ env.CUSTOM_BASE_BRANCH }}
+          MIRROR_BRANCH: ${{ env.MIRROR_BRANCH }}
+        run: |
+          set -euo pipefail
+          git fetch upstream tag "${RELEASE_TAG}" --no-tags
+          git checkout -B "${RELEASE_TRACKING_BRANCH}" "${RELEASE_TAG}"
+          mkdir -p "$(dirname "${RELEASE_BASE_FILE}")"
+          printf '%s\n' "${RELEASE_TAG}" > "${RELEASE_BASE_FILE}"
+          git add "${RELEASE_BASE_FILE}"
+          if ! git diff --cached --quiet; then
+            git commit -m "Track upstream release ${RELEASE_TAG}"
+          fi
+          if git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
+            git fetch origin "${CUSTOM_BASE_BRANCH}"
+            if git rev-list --count "${MIRROR_BRANCH}..origin/${CUSTOM_BASE_BRANCH}" | grep -qv '^0$'; then
+              git cherry-pick "${MIRROR_BRANCH}..origin/${CUSTOM_BASE_BRANCH}"
+            fi
+          fi
+          git push origin "${RELEASE_TRACKING_BRANCH}" --force-with-lease
