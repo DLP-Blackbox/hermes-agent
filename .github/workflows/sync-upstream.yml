@@ -16,10 +16,9 @@ concurrency:
 env:
   UPSTREAM_REPO: NousResearch/hermes-agent
   UPSTREAM_BRANCH: main
-  MIRROR_BRANCH: main
-  CUSTOM_BASE_BRANCH: custom-base
-  RELEASE_TRACKING_BRANCH: release-tracking
-  RELEASE_BASE_FILE: .fork/release-base
+  MIRROR_BRANCH: nous-upstream
+  CUSTOM_BASE_BRANCH: main
+  RELEASE_BRANCH: hermes-release/v4.0.00
 
 jobs:
   sync:
@@ -56,7 +55,7 @@ jobs:
           git fetch upstream "${UPSTREAM_BRANCH}"
           git fetch upstream --tags
 
-      - name: Sync main mirror from upstream
+      - name: Sync nous-upstream mirror from upstream
         run: |
           set -euo pipefail
           if git show-ref --verify --quiet "refs/remotes/origin/${MIRROR_BRANCH}"; then
@@ -67,7 +66,7 @@ jobs:
           git reset --hard "upstream/${UPSTREAM_BRANCH}"
           git push origin "HEAD:${MIRROR_BRANCH}" --force-with-lease
 
-      - name: Rebase custom-base onto main
+      - name: Rebase main onto nous-upstream
         run: |
           set -euo pipefail
           if ! git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
@@ -76,10 +75,10 @@ jobs:
           fi
           git fetch origin "${CUSTOM_BASE_BRANCH}"
           git checkout "${CUSTOM_BASE_BRANCH}"
-          if git rev-list --count "${MIRROR_BRANCH}..HEAD" >/dev/null 2>&1; then
+          if git rev-list --count "${MIRROR_BRANCH}..HEAD" | grep -qv '^0$'; then
             git rebase "${MIRROR_BRANCH}"
           else
-            echo "custom-base has no unique commits; resetting to main."
+            echo "main has no unique commits; resetting to nous-upstream."
             git reset --hard "${MIRROR_BRANCH}"
           fi
           git push origin "${CUSTOM_BASE_BRANCH}" --force-with-lease
@@ -91,34 +90,27 @@ jobs:
           UPSTREAM_REPO: ${{ env.UPSTREAM_REPO }}
         run: |
           set -euo pipefail
-          release_tag="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq -r '.tag_name')"
+          release_tag="$(gh release view --repo "${UPSTREAM_REPO}" --json tagName -q .tagName)"
           if [ -z "${release_tag}" ] || [ "${release_tag}" = "null" ]; then
             echo "::error::Could not resolve latest release tag from ${UPSTREAM_REPO}"
             exit 1
           fi
           echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Rebase release-tracking onto latest upstream release
+      - name: Rebase hermes-release/v4.0.00 onto latest upstream release
         env:
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
-          RELEASE_BASE_FILE: ${{ env.RELEASE_BASE_FILE }}
-          RELEASE_TRACKING_BRANCH: ${{ env.RELEASE_TRACKING_BRANCH }}
+          RELEASE_BRANCH: ${{ env.RELEASE_BRANCH }}
           CUSTOM_BASE_BRANCH: ${{ env.CUSTOM_BASE_BRANCH }}
           MIRROR_BRANCH: ${{ env.MIRROR_BRANCH }}
         run: |
           set -euo pipefail
           git fetch upstream tag "${RELEASE_TAG}" --no-tags
-          git checkout -B "${RELEASE_TRACKING_BRANCH}" "${RELEASE_TAG}"
-          mkdir -p "$(dirname "${RELEASE_BASE_FILE}")"
-          printf '%s\n' "${RELEASE_TAG}" > "${RELEASE_BASE_FILE}"
-          git add "${RELEASE_BASE_FILE}"
-          if ! git diff --cached --quiet; then
-            git commit -m "Track upstream release ${RELEASE_TAG}"
-          fi
+          git checkout -B "${RELEASE_BRANCH}" "${RELEASE_TAG}"
           if git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
             git fetch origin "${CUSTOM_BASE_BRANCH}"
             if git rev-list --count "${MIRROR_BRANCH}..origin/${CUSTOM_BASE_BRANCH}" | grep -qv '^0$'; then
               git cherry-pick "${MIRROR_BRANCH}..origin/${CUSTOM_BASE_BRANCH}"
             fi
           fi
-          git push origin "${RELEASE_TRACKING_BRANCH}" --force-with-lease
+          git push origin "${RELEASE_BRANCH}" --force-with-lease
