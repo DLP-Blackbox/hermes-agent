@@ -16,8 +16,8 @@ concurrency:
 env:
   UPSTREAM_REPO: NousResearch/hermes-agent
   UPSTREAM_BRANCH: main
-  MIRROR_BRANCH: nous-upstream
-  CUSTOM_BASE_BRANCH: main
+  MIRROR_BRANCH: main
+  CUSTOM_BASE_BRANCH: nous-upstream
   RELEASE_BRANCH: hermes-release/v4.0.00
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
           git fetch upstream "${UPSTREAM_BRANCH}"
           git fetch upstream --tags
 
-      - name: Sync nous-upstream mirror from upstream
+      - name: Sync main mirror from upstream
         run: |
           set -euo pipefail
           if git show-ref --verify --quiet "refs/remotes/origin/${MIRROR_BRANCH}"; then
@@ -66,7 +66,7 @@ jobs:
           git reset --hard "upstream/${UPSTREAM_BRANCH}"
           git push origin "HEAD:${MIRROR_BRANCH}" --force-with-lease
 
-      - name: Rebase main onto nous-upstream
+      - name: Rebase nous-upstream onto main
         run: |
           set -euo pipefail
           if ! git ls-remote --exit-code --heads origin "${CUSTOM_BASE_BRANCH}" >/dev/null 2>&1; then
@@ -78,7 +78,7 @@ jobs:
           if git rev-list --count "${MIRROR_BRANCH}..HEAD" | grep -qv '^0$'; then
             git rebase "${MIRROR_BRANCH}"
           else
-            echo "main has no unique commits; resetting to nous-upstream."
+            echo "nous-upstream has no unique commits; resetting to main."
             git reset --hard "${MIRROR_BRANCH}"
           fi
           git push origin "${CUSTOM_BASE_BRANCH}" --force-with-lease
